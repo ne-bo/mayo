@@ -1,7 +1,5 @@
 import torch
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.strategies import DDPStrategy
-
 
 from dataset import DataModule
 from model import MayoModel
@@ -10,13 +8,15 @@ AVAIL_GPUS = min(1, torch.cuda.device_count())
 
 seed_everything(3)
 
-dm = DataModule(train_batch_size=1, eval_batch_size=1, train_or_test='train')
+dm = DataModule(train_batch_size=32, eval_batch_size=32, train_or_test='train')
 print('dm is created')
 
 model = MayoModel(
     eval_splits=dm.eval_splits,
-   # weight_decay=1e-3,
-    learning_rate=1e-2,
+    # weight_decay=1e-3,
+    train_batch_size=dm.train_batch_size,
+    eval_batch_size=dm.eval_batch_size,
+    learning_rate=3e-4
 
 )
 
@@ -31,7 +31,7 @@ checkpoint_callback = ModelCheckpoint(
 
 from pytorch_lightning.loggers import TensorBoardLogger
 
-logger = TensorBoardLogger("lightning_logs", name='fc')
+logger = TensorBoardLogger("lightning_logs", name='downscaled_resnet50_aug')
 # fold0 epoch 16
 # fold1 epoch 15
 # fold2 epoch 18
