@@ -4,8 +4,9 @@ from model import MayoModel
 model = MayoModel.load_from_checkpoint(
     'lightning_logs/downscaled_resnet50_aug/version_8/checkpoints/epoch=8-step=162.ckpt')
 model = model.eval()
-
-# print('model device ', model.device)
+model.cuda()
+print('model device ', model.device)
+input()
 
 dm = DataModule(train_batch_size=1, eval_batch_size=1, train_or_test='test')
 mean_values = []

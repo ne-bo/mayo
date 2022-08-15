@@ -6,11 +6,12 @@ import PIL
 import cv2
 import numpy as np
 import pandas as pd
+import torch
 from PIL.Image import Image
 from albumentations import CoarseDropout, Compose, Flip, RandomRotate90, Resize
-from openslide import OpenSlide
 from pytorch_lightning import LightningDataModule
 from sklearn.model_selection import StratifiedKFold
+from tifffile import tifffile
 from torch.utils.data import DataLoader, Dataset
 
 
@@ -22,7 +23,7 @@ class MayoDataset(Dataset):
         labels_dict = {'CE': 0, 'LAA': 1, 'Other': 2, 'Unknown': 3}
         if test_or_train in ['train', 'validation']:
             print('read train csv')
-            data = pd.read_csv(self.data_dir + 'train.csv')  # [:17]
+            data = pd.read_csv(self.data_dir + 'train.csv')
             print('data ', len(data))
             # print('df ', data)
 
@@ -38,7 +39,13 @@ class MayoDataset(Dataset):
                                     'center_id': content['center_id'],
                                     'patient_id': content['patient_id'],
                                     'image_num': int(content['image_num']),
-                                    'label': labels_dict[content['label']]})
+                                    'label': labels_dict[content['label']],
+                                    'image': None,
+                                    '64': None,
+                                    '128': None,
+                                    '256': None,
+                                    '384': None,
+                                    '512': None, })
 
             train_indices, val_indices = self.stratify_folds(dataset)
 
@@ -69,23 +76,30 @@ class MayoDataset(Dataset):
                     dataset.append({'image_id': content['image_id'],
                                     'center_id': content['center_id'],
                                     'patient_id': content['patient_id'],
-                                    'image_num': int(content['image_num'])})
+                                    'image_num': int(content['image_num']),
+                                    'image': None,
+                                    '64': None,
+                                    '128': None,
+                                    '256': None,
+                                    '384': None,
+                                    '512': None
+                                    })
             self.dataset = [el for el in dataset]
             self.dataset = np.array(self.dataset)
-            print('self.dataset ', len(self.dataset))
+            # print('self.dataset ', len(self.dataset))
         # print('self.dataset ', self.dataset)
-        print('self.dataset ', self.dataset)
+        # print('self.dataset ', self.dataset)
         self.test_or_train = test_or_train
 
     def stratify_folds(self, dataset):
         skf = StratifiedKFold(n_splits=5)
-        print('skf.split(dataset, [el[\'label\'] for el in dataset]) ',
-              skf.split(dataset, [value['label'] for value in dataset]))
+        # print('skf.split(dataset, [el[\'label\'] for el in dataset]) ',
+        #       skf.split(dataset, [value['label'] for value in dataset]))
         for t, v in skf.split(dataset, [value['label'] for value in dataset]):
             train_indices = t
             val_indices = v
-        print('val_indices ', val_indices, val_indices.shape)
-        print('train_indices ', train_indices, train_indices.shape)
+        # print('val_indices ', val_indices, val_indices.shape)
+        # print('train_indices ', train_indices, train_indices.shape)
         return train_indices, val_indices
 
     def get_iou(self, bb1, bb2):
@@ -216,74 +230,219 @@ class MayoDataset(Dataset):
 
     def __getitem__(self, index):
         sample = self.dataset[index]
+        sample_boxes = []
         tif_path = os.path.join(self.data_dir, 'train', sample['image_id'] + '.tif')
         npy_path = tif_path.replace('.tif', '.npy')
         png_path = tif_path.replace('.tif', '.png')
         if not os.path.exists(npy_path):
-            try:
-                slide = OpenSlide(tif_path)
-                # print('sample', sample, slide.properties)
-                downscale_factor = 100
-                resized_img = slide.read_region((0, 0), 0, slide.dimensions) \
-                    .resize((slide.dimensions[0] // downscale_factor, slide.dimensions[1] // downscale_factor))
+            try:  # if os.path.exists(tif_path):
+                # slide = OpenSlide(tif_path)
+                # # print('sample', sample, slide.properties)
+                # downscale_factor = 100
+                # resized_img = slide.read_region((0, 0), 0, slide.dimensions) \
+                #     .resize((slide.dimensions[0] // downscale_factor, slide.dimensions[1] // downscale_factor))
 
-                resized_img.convert("RGB").save(png_path)
+                print('cv2 resize ', tif_path)
+                tiff_image = tifffile.imread(tif_path)
+                print('tiff', tiff_image.shape)
+                resized_img = cv2.resize(tiff_image, (tiff_image.shape[0] // 100, tiff_image.shape[1] // 100))
+
+                pil_image = PIL.Image.fromarray(resized_img.astype('uint8'))
+                pil_image.convert("RGB").save(png_path)
                 # print('img ', img)
 
-                np.save(npy_path, np.array(resized_img.convert("RGB")).transpose((2, 0, 1)))
+                np.save(npy_path, resized_img)
 
                 # print('img shape', img.shape)
                 print('os.path.exists(npy_path) ', os.path.exists(npy_path), npy_path)
                 if os.path.exists(npy_path):
-                    gray_img = np.array(resized_img.convert("L"))
+                    gray_img = np.array(pil_image.convert("L"))
                     bound_rect = self.thresh_callback(gray_img)
-                    print('bound_rect ', bound_rect, len(bound_rect))
+                    # print('bound_rect ', bound_rect, len(bound_rect))
                     # input()
-                    for idx, rect in enumerate(bound_rect):
-                        if rect[2] > 1 and rect[3] > 1:
-                            downscale_factor = 10
-                            resized_box = slide.read_region((rect[0] * 100, rect[1] * 100), 0,
-                                                            (rect[2] * 100, rect[3] * 100)) \
-                                .resize(
-                                (rect[2] * 100 // downscale_factor, rect[3] * 100 // downscale_factor)).convert(
-                                "RGB")
-                            resized_box.save(png_path.replace('.png', '_%d.png' % idx))
-                            # print('img ', img)
-                            resized_box = np.array(resized_box).transpose((2, 0, 1))
-                            # print('resized_box shape', resized_box.shape)
-                            np.save(npy_path.replace('.npy', '_%d.npy' % idx), resized_box)
-                            resized_box = None
-                            gc.collect()
-                img = np.array(resized_img.convert("RGB")).transpose((2, 0, 1))
+                    self.get_and_save_boxes(bound_rect, npy_path, png_path, sample_boxes, tiff_image)
+                img = resized_img
             except:
                 if os.path.exists(tif_path):
                     print('problems with ', tif_path)
                     input()
-                img = np.zeros((3, 77, 77))
+                img = np.zeros((3, 256, 256))
 
         else:
-            img = np.load(npy_path).transpose((1, 2, 0))
+            img = np.load(npy_path)
+            for idx in range(21):
+                if os.path.exists(npy_path.replace('.npy', '_%d.npy' % idx)):
+                    sample_boxes.append(np.load(npy_path.replace('.npy', '_%d.npy' % idx)))
 
         if self.test_or_train == 'train':
             transform = Compose([
+                # Normalize(),
                 Resize(height=256, width=256, always_apply=True),
+                RandomRotate90(),
+                CoarseDropout(),
+                Flip()
+            ])
+            transform_64 = Compose([
+                # Normalize(),
+                Resize(height=64, width=64, always_apply=True),
+                RandomRotate90(),
+                CoarseDropout(),
+                Flip()
+            ])
+            transform_128 = Compose([
+                # Normalize(),
+                Resize(height=128, width=128, always_apply=True),
+                RandomRotate90(),
+                CoarseDropout(),
+                Flip()
+            ])
+            transform_256 = Compose([
+                # Normalize(),
+                Resize(height=256, width=256, always_apply=True),
+                RandomRotate90(),
+                CoarseDropout(),
+                Flip()
+            ])
+            transform_384 = Compose([
+                # Normalize(),
+                Resize(height=384, width=384, always_apply=True),
+                RandomRotate90(),
+                CoarseDropout(),
+                Flip()
+            ])
+            transform_512 = Compose([
+                # Normalize(),
+                Resize(height=512, width=512, always_apply=True),
                 RandomRotate90(),
                 CoarseDropout(),
                 Flip()
             ])
         else:
             transform = Compose([
+                # Normalize(),
                 Resize(height=256, width=256, always_apply=True)
             ])
+            transform_64 = Compose([
+                # Normalize(),
+                Resize(height=64, width=64, always_apply=True),
+            ])
+            transform_128 = Compose([
+                # Normalize(),
+                Resize(height=128, width=128, always_apply=True),
+            ])
+            transform_256 = Compose([
+                # Normalize(),
+                Resize(height=256, width=256, always_apply=True),
+            ])
+            transform_384 = Compose([
+                # Normalize(),
+                Resize(height=384, width=384, always_apply=True),
+            ])
+            transform_512 = Compose([
+                # Normalize(),
+                Resize(height=512, width=512, always_apply=True),
+            ])
         # print('img ',img.shape)
-        augmented_image = transform(image=img)['image']
+        # boxes_64 = []
+        # boxes_128 = []
+        # boxes_256 = []
+        # boxes_384 = []
+        boxes_512 = []
+        for i, box in enumerate(sample_boxes):
+            # print(box.shape)
+            max_side = max(box.shape[0], box.shape[1])
+            # if 0 < max_side <= 100:
+            #     boxes_64.append(transform_64(image=box)['image'].transpose((2, 0, 1)))
+            # if 100 < max_side <= 256:
+            #     boxes_128.append(transform_128(image=box)['image'].transpose((2, 0, 1)))
+            # if 256 < max_side <= 384:
+            #     boxes_256.append(transform_256(image=box)['image'].transpose((2, 0, 1)))
+            # if 384 < max_side <= 512:
+            #    boxes_384.append(transform_384(image=box)['image'].transpose((2, 0, 1)))
+            if 512 < max_side:
+                boxes_512.append(transform_512(image=box)['image'].transpose((2, 0, 1)))
+        for b_list, size in zip([  # boxes_64,
+            # boxes_128,
+            # boxes_256,
+            # boxes_384,
+            boxes_512],
+                [  # 64,
+                    # 128,
+                    # 256,
+                    # 384,
+                    512]):
+            if len(b_list) == 0:
+                b_list.append(np.zeros((3, size, size)))
+            # while len(b_list) < 10:
+            #    b_list.append(b_list[-1])
+
+        # for i, b in enumerate(sample_boxes):
+        #     sample_boxes[i] = None
+        # sample_boxes = None
+        # gc.collect()
+
+        # augmented_image = transform(image=img)['image']
         # print('augmented_image ', augmented_image.shape)
-        sample['image'] = augmented_image.transpose((2, 0, 1))
-        # input()
+        # sample['image'] = augmented_image.transpose((2, 0, 1))
+        # sample['64'] = np.stack(boxes_64)[:10]
+        # sample['128'] = np.stack(boxes_128)[:10]
+        # sample['256'] = np.stack(boxes_256)[:10]
+        # sample['384'] = np.stack(boxes_384)[:10]
+        sample['512'] = np.stack(boxes_512)[:10]
+        # print('boxes_512   ', len(boxes_512))
+        # print('sample[512] ', sample['512'])
+
+        # for b_list in [#boxes_64,
+        #                #boxes_128,
+        #     boxes_256, boxes_384, boxes_512]:
+        #     for i, b in enumerate(b_list):
+        #         b_list[i] = None
+        #     b_list = None
+        #     gc.collect()
+        # gc.collect()
         return sample
+
+    def get_and_save_boxes(self, bound_rect, npy_path, png_path, sample_boxes, tiff_image):
+        for idx, rect in enumerate(bound_rect):
+            if rect[2] > 1 and rect[3] > 1:
+                resized_box = tiff_image[rect[0] * 100:(rect[0] + rect[2]) * 100,
+                              rect[1] * 100:(rect[1] + rect[3]) * 100]
+                resized_box = cv2.resize(resized_box, (resized_box.shape[0] // 10, resized_box.shape[1] // 10))
+
+                PIL.Image.fromarray(resized_box.astype('uint8')).save(png_path.replace('.png', '_%d.png' % idx))
+                # print('img ', img)
+
+                # print('resized_box shape', resized_box.shape)
+                np.save(npy_path.replace('.npy', '_%d.npy' % idx), resized_box)
+                sample_boxes.append(resized_box)
+                resized_box = None
+                gc.collect()
 
     def __len__(self):
         return len(self.dataset)
+
+
+def natasha_collate_fn(items):
+    batch_size = len(items)
+    s = {}
+    for key in items[0].keys():
+        # print('key ', key)
+        if key in [  # '256',
+            # '384',
+            '512']:
+            # print( ' items[0][key].shape ', items[0][key].shape)
+            s[key] = torch.zeros(batch_size, *items[0][key].shape)
+            for idx, x in enumerate(items):
+                s[key][idx] = torch.as_tensor(x[key])
+
+        if key in ['image_id', 'center_id', 'patient_id', 'image_num', 'label', 'image', '64', '128']:
+            # print('except ', key)
+            s[key] = [items[idx][key] for idx in range(batch_size)]
+            if key == 'label':
+                s[key] = torch.as_tensor(s[key])
+    # items = None
+    # gc.collect()
+    return s
 
 
 class DataModule(LightningDataModule):
@@ -306,20 +465,27 @@ class DataModule(LightningDataModule):
         else:
             print('create test dataset')
             self.dataset['test'] = MayoDataset('test')
-            print('self.dataset[\'test\'] ', self.dataset['test'])
+            # print('self.dataset[\'test\'] ', self.dataset['test'])
         self.eval_splits = [x for x in self.dataset.keys() if "validation" in x]
 
     def train_dataloader(self):
         print('self.train_batch_size ', self.train_batch_size)
         return DataLoader(self.dataset["train"],
-                          batch_size=self.train_batch_size, shuffle=True
+                          batch_size=self.train_batch_size, shuffle=True,
+                          collate_fn=natasha_collate_fn
                           )
 
     def val_dataloader(self):
         if len(self.eval_splits) == 1:
-            return DataLoader(self.dataset["validation"], batch_size=self.eval_batch_size)
+            return DataLoader(self.dataset["validation"], batch_size=self.eval_batch_size,
+                              collate_fn=natasha_collate_fn
+                              )
         elif len(self.eval_splits) > 1:
-            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size) for x in self.eval_splits]
+            return [DataLoader(self.dataset[x], batch_size=self.eval_batch_size,
+                               collate_fn=natasha_collate_fn
+                               ) for x in self.eval_splits]
 
     def test_dataloader(self):
-        return DataLoader(self.dataset["test"], batch_size=self.eval_batch_size)
+        return DataLoader(self.dataset["test"], batch_size=self.eval_batch_size,
+                          collate_fn=natasha_collate_fn
+                          )

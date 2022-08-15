@@ -8,7 +8,7 @@ AVAIL_GPUS = min(1, torch.cuda.device_count())
 
 seed_everything(3)
 
-dm = DataModule(train_batch_size=32, eval_batch_size=32, train_or_test='train')
+dm = DataModule(train_batch_size=1, eval_batch_size=1, train_or_test='train')
 print('dm is created')
 
 model = MayoModel(
@@ -16,10 +16,9 @@ model = MayoModel(
     # weight_decay=1e-3,
     train_batch_size=dm.train_batch_size,
     eval_batch_size=dm.eval_batch_size,
-    learning_rate=3e-4
+    learning_rate=1e-3
 
 )
-
 
 print('model is created')
 from pytorch_lightning.callbacks import ModelCheckpoint, StochasticWeightAveraging
@@ -31,12 +30,7 @@ checkpoint_callback = ModelCheckpoint(
 
 from pytorch_lightning.loggers import TensorBoardLogger
 
-logger = TensorBoardLogger("lightning_logs", name='downscaled_resnet50_aug')
-# fold0 epoch 16
-# fold1 epoch 15
-# fold2 epoch 18
-# fold3 epoch 17
-# fold4 epoch 20
+logger = TensorBoardLogger("lightning_logs", name='512')
 
 
 trainer = Trainer(max_epochs=100,
@@ -44,14 +38,15 @@ trainer = Trainer(max_epochs=100,
                   check_val_every_n_epoch=1,
                   # auto_scale_batch_size=True,
                   callbacks=[checkpoint_callback,
-                            StochasticWeightAveraging(0.99)
+                             StochasticWeightAveraging(0.99)
                              ],
                   logger=logger,
+                  accumulate_grad_batches=16,
 
-                  #accelerator="gpu",
-                  #devices=4,
-                  #strategy=DDPStrategy(find_unused_parameters=False),
-#replace_sampler_ddp=False,
+                  # accelerator="gpu",
+                  # devices=4,
+                  # strategy=DDPStrategy(find_unused_parameters=False),
+                  # replace_sampler_ddp=False,
                   )
 print('trainer is created')
 trainer.fit(model, datamodule=dm)
